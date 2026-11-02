@@ -75,7 +75,12 @@ export function selectEvidence(query: string, sources: Source[]): { results: Sea
     const fullExcerpt = cleaned.slice(0, 2000);
     const sentences = cleaned.split("\n").flatMap((line) =>
       Array.from(segmenter.segment(line), (part) => part.segment.trim()))
-      .filter((text) => text.length >= 20 && !isBoilerplate(text) && (text.match(/[\p{L}\p{N}]+/gu) ?? []).length >= 4);
+      .filter((text) => text.length >= 20 && !isBoilerplate(text) && (text.match(/[\p{L}\p{N}]+/gu) ?? []).length >= 4)
+      // Titles repeat query words but rarely answer the question. Require a
+      // complete statement and skip article titles and calls to read a list.
+      .filter((text) => /[.!?]["'”’\])]*$/.test(text) &&
+        [...words(text)].join(" ") !== [...words(source.title)].join(" ") &&
+        !/\b(?:see (?:our|the) list|(?:this|our) (?:guide|list) (?:to|of)|according to us)\b/i.test(text));
     const ranked = sentences.map((text) => {
       const terms = words(text);
       const matches = [...queryWords].filter((word) => terms.has(word)).length;

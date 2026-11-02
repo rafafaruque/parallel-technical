@@ -105,6 +105,28 @@ test('API workflow and persistence safeguards', async (t) => {
     assert.ok(data.results.every(result => result.snippet.length <= 220));
   });
 
+  await t.test('answers recommendation queries with descriptive evidence rather than article headings', async () => {
+    const recommendation = 'Example Pizzeria serves some of the best pizza in NYC, with a crisp crust and fresh tomato sauce.';
+    mockParallel({ results: [{
+      title: 'The 26 Best Pizza Places In NYC', url: 'https://example.com/pizza',
+      excerpts: [
+        'The 26 Best Pizza Places In NYC\nAn expert\'s guide to the best pizza in NYC\nThe Best Pizza In Brooklyn\nThe 26 Best Pizza Places In NYC.',
+        'Below, see our list of the best pizza in NYC.', 'The top pizzas in NYC, according to us.', recommendation,
+      ],
+    }] });
+    const data = await (await research.POST(request({ query: 'best pizza in nyc' }))).json();
+    assert.equal(data.answer, recommendation);
+    assert.deepEqual(data.answerParts, [{ text: recommendation, sourceUrl: 'https://example.com/pizza' }]);
+    assert.equal(data.results[0].snippet, recommendation);
+  });
+
+  await t.test('does not present a page title as an answer when it is the only matching evidence', async () => {
+    mockParallel({ results: [{ title: 'The Best Pizza In NYC', url: 'https://example.com/pizza', excerpts: ['The Best Pizza In NYC\nThe Best Pizza In NYC.'] }] });
+    const data = await (await research.POST(request({ query: 'best pizza in nyc' }))).json();
+    assert.equal(data.answer, '');
+    assert.deepEqual(data.answerParts, []);
+  });
+
   await t.test('caps answers at three short quotes, deduplicates, and keeps long source details', async () => {
     const quotes = [
       'Photosynthesis converts light energy into chemical energy in plants.',
