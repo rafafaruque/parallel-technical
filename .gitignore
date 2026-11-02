@@ -1,0 +1,13 @@
+node_modules/
+.next/
+out/
+.env*
+*.tsbuildinfo
+next-env.d.ts
+npm-debug.log*
+.DS_Store
+data/*.json
+data/*.tmp
+playwright-report/
+test-results/
+!.env.example
