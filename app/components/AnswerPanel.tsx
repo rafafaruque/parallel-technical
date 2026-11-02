@@ -61,7 +61,7 @@ export default function AnswerPanel({ results, onSaved, onSavingChange }: {
       {results.answer && (
         <div className="answer-panel">
           <h3>Extractive answer</h3>
-          <p className="answer-label">Quoted from the first two results with excerpts, in Parallel’s relevance order. This is evidence to review, not a generated or verified answer.</p>
+          <p className="answer-label">Short excerpts selected for relevance to your question, with source links. Review the evidence for accuracy.</p>
           {results.answerParts.map((part, index) => (
             <blockquote key={index}>
               <p>{part.text}</p>
@@ -71,11 +71,11 @@ export default function AnswerPanel({ results, onSaved, onSavingChange }: {
         </div>
       )}
       {results.results.length > 0 && !results.answer && (
-        <p className="placeholder">Sources were found but no usable excerpts were returned. Try another query.</p>
+        <p className="placeholder">There isn’t enough relevant information in these results to answer your question. Try a more specific query.</p>
       )}
       {results.results.length > 0 && <h3>Supporting sources</h3>}
       {results.results.length === 0 && (
-        <p className="placeholder">No results found. Try a different research query.</p>
+        <p className="placeholder">No results found. There isn’t enough information to answer your question. Try a different query.</p>
       )}
       <ul className="result-list">
         {results.results.map((result) => ( // .map creates a new item for each item in results array
@@ -83,7 +83,13 @@ export default function AnswerPanel({ results, onSaved, onSavingChange }: {
           <li key={result.url}>
             <h3><a href={result.url} target="_blank" rel="noreferrer">{result.title} ↗</a></h3>
             <p className="result-url">{result.url}</p>
-            <p>{result.snippet}</p>
+            <p>{result.snippet || "No readable excerpt available."}</p>
+            {result.fullExcerpt && result.fullExcerpt !== result.snippet && (
+              <details>
+                <summary>Show longer excerpts</summary>
+                <p className="saved-answer">{result.fullExcerpt}</p>
+              </details>
+            )}
           </li>
         ))}
       </ul>

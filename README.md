@@ -9,10 +9,10 @@ Use Node.js 22.18+ (also required by the tests).
 ```sh
 npm ci
 # If .env.local is missing, copy .env.example to .env.local and add your key.
-npm run dev
+npm run dev -- --port 3001
 ```
 
-Open http://localhost:3000. A configured local `.env.local` was copied without displaying its contents. `PARALLEL_API_KEY` stays on the server. `.env.local`, runtime evaluations, dependencies, and build outputs are ignored by Git.
+Open http://localhost:3001. A configured local `.env.local` was copied without displaying its contents. `PARALLEL_API_KEY` stays on the server. `.env.local`, runtime evaluations, dependencies, and build outputs are ignored by Git.
 
 ```sh
 npm test
@@ -27,7 +27,7 @@ Enter a question, inspect the extractive answer and supporting source links, cho
 
 The optional comparison is complete: select any two different modes from `turbo`, `fast`, `basic`, and `advanced`, enable **Compare two modes**, and search. Both requests use the same question. Results appear side by side on desktop and stack on mobile, with separate ratings, notes, save confirmations, search IDs, and latency. A failure in one mode leaves the other answer available. Comparison makes two Search calls.
 
-The browser calls `POST /api/research`; that route calls `https://api.parallel.ai/v1/search` with the server-side key. Search returns sources and excerpts, not a synthesized answer. The app quotes the first nonblank excerpt from each of the first two results that contain usable excerpts, in Parallel’s relevance order. Each quote is limited to 1,000 characters (an ellipsis marks truncation) and links to its source. The displayed answer is those exact quotes joined by two newlines. No language model generates or verifies the answer. Relevance ordering alone may not produce a complete answer; that is what the human evaluator reviews.
+The browser calls `POST /api/research`; that route calls `https://api.parallel.ai/v1/search` with the server-side key. Search returns sources and excerpts, not a synthesized answer. The app removes common navigation/signup boilerplate and Markdown formatting, splits all returned excerpts into sentences, and ranks them by keyword overlap with the actual question. It selects up to three distinct relevant quotes, each at most 280 characters, with a total text budget of 720 characters and a link for each quote. Claims are preserved without paraphrasing or mid-sentence truncation. If no suitable evidence is found, the UI explicitly says there is not enough relevant information and hides the feedback form. This is a conservative keyword heuristic, not semantic understanding; differently worded evidence may be missed. Supporting results show snippets up to 220 characters, with expandable cleaned excerpts. The displayed answer is those exact quotes joined by two newlines. No language model generates or verifies the answer. Keyword relevance alone may not produce a complete answer; that is what the human evaluator reviews.
 
 Search defaults to explicit `fast` mode, requests five results with a 2,000-character excerpt budget per result, and times out after 30 seconds. The backend validates input, returned results, and HTTP(S) source URLs. See the [official Parallel Search documentation](https://docs.parallel.ai/api-reference/search/search) for request fields and modes.
 
@@ -49,6 +49,7 @@ This is a local demo persistence solution. It uses a write queue within one Node
 - `app/components/AnswerPanel.tsx`: extractive answer/source rendering and feedback state for one execution.
 - `app/api/research/route.ts`: adapted starter’s server-side Parallel integration.
 - `app/api/evaluations/route.ts`: feedback POST and history GET.
+- `app/lib/extractive-answer.ts`: lightweight excerpt cleaning, relevance ranking, and concise source previews.
 - `app/lib/types.ts`: shared types and runtime validation.
 - `app/lib/feedback-token.ts`: signed execution snapshots.
 - `app/lib/evaluation-store.ts`: persistent file access and idempotent writes.
@@ -58,11 +59,11 @@ This is a local demo persistence solution. It uses a write queue within one Node
 
 ## Verification
 
-The automated suite covers validation, exact extractive evidence and citations, missing credentials, both ratings and notes, duplicate concurrent submissions, altered answer snapshots, empty results, malformed upstream results, upstream authentication/rate-limit/network errors, disk retrieval, and corrupt-file recovery. Run `npm test` to repeat it.
+The automated suite covers question-based ranking across excerpts, boilerplate/Markdown filtering, answer and preview length limits, duplicate quotes, insufficient evidence, preservation of negations, exact cleaned-answer persistence, validation, exact extractive evidence and citations, missing credentials, both ratings and notes, duplicate concurrent submissions, altered answer snapshots, empty results, malformed upstream results, upstream authentication/rate-limit/network errors, disk retrieval, and corrupt-file recovery. Run `npm test` to repeat it.
 
 Verified locally during implementation:
 
-- `npm test`: all 11 checks passed (including the containing workflow test); provider responses are mocked and filesystem data is isolated in a temporary directory.
+- `npm test`: all 16 checks passed (including the containing workflow test); provider responses are mocked and filesystem data is isolated in a temporary directory.
 - `npm run typecheck` and `npm run build`: passed.
 - Chrome browser, using the production build: real questions returned live Parallel Search results; displayed quotes matched the returned answer; a supporting source opened successfully; both ratings saved; notes persisted; a new search cleared old feedback; duplicate saves were disabled.
 - Browser refresh and an actual local server stop/restart preserved the complete saved records in both the API and UI.
@@ -73,6 +74,6 @@ Verified locally during implementation:
 
 Some live source URLs returned HTTP 403 or 404 during testing; another source returned HTTP 200. Sources are returned by Parallel and linked directly. The app does not verify publisher availability or bypass access restrictions.
 
-Temporary test feedback is removed before handoff, leaving `data/evaluations.json` empty. Tests do not seed the app with example evaluations.
+Automated tests use an isolated temporary data directory and do not seed or clear the app’s evaluations. The answer-readability browser checks at http://localhost:3001 used a live Search response and intercepted evaluation responses to leave existing saved feedback untouched; they verified concise quotes, expandable previews, independent comparison panels, the insufficient-evidence fallback, and mobile layout. Actual JSON persistence and exact cleaned-answer equality are covered by the API tests.
 
 To manually repeat restart persistence: save feedback, reload the browser, stop the app, restart it from this project folder, and confirm the same record appears under Saved Evaluations. No synthesized-answer model or production database is included; all required core features and the two-mode bonus are implemented.

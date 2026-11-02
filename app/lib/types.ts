@@ -2,7 +2,7 @@ export const SEARCH_MODES = ["turbo", "fast", "basic", "advanced"] as const;
 export type SearchMode = (typeof SEARCH_MODES)[number];
 export type Rating = "correct" | "incorrect";
 
-export type SearchResult = { title: string; url: string; snippet: string };
+export type SearchResult = { title: string; url: string; snippet: string; fullExcerpt?: string };
 export type AnswerPart = { text: string; sourceUrl: string };
 export type SearchSnapshot = {
   executionId: string;
@@ -65,7 +65,8 @@ export function isSearchSnapshot(value: unknown): value is SearchSnapshot {
       isRecord(part) && typeof part.text === "string" && isHttpUrl(part.sourceUrl)) &&
     Array.isArray(value.results) && value.results.every((result) =>
       isRecord(result) && typeof result.title === "string" &&
-      isHttpUrl(result.url) && typeof result.snippet === "string");
+      isHttpUrl(result.url) && typeof result.snippet === "string" &&
+      (result.fullExcerpt === undefined || typeof result.fullExcerpt === "string"));
 }
 
 export function isResearchResponse(value: unknown): value is ResearchResponse {

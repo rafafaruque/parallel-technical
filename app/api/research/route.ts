@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createFeedbackToken } from "../../lib/feedback-token";
-import { isHttpUrl, isSearchMode, type AnswerPart, type SearchSnapshot } from "../../lib/types";
+import { isHttpUrl, isSearchMode, type SearchSnapshot } from "../../lib/types";
+import { selectEvidence } from "../../lib/extractive-answer";
 
 export const runtime = "nodejs";
 
@@ -70,8 +71,9 @@ export async function POST(request: Request) {
         search_queries: [query], // list of strings, in an array, because Parallel can handle multiple queries
         //  at once. each item is a sep stirng and theyre all sent together as 1 JSON request
         // objective tells Parallel what the user is trying to do, which helps
-        // it return better results. Here we use the same value as the query.
-        objective: query,
+        // it return better results. Add source and relevance guidance while
+        // keeping the user's question as the research goal.
+        objective: `Find authoritative information directly answering the user's question. Prioritize official and relevant sources. For company or product overview questions, identify the company's main products and services rather than legal definitions or obscure technical documentation. Avoid irrelevant navigation, boilerplate, and unrelated material.\n\nUser question: ${query}`,
         mode, // Pin the mode explicitly rather than relying on Parallel's default.
         advanced_settings: { max_results: 5, excerpt_settings: { max_chars_per_result: 2000 } },
       }),
@@ -127,8 +129,7 @@ export async function POST(request: Request) {
   }
 
   // creates an empty array
-  const results = [];
-  const answerParts: AnswerPart[] = [];
+  const sources = [];
 
   for (const result of parallelData.results) {
     if (
@@ -143,21 +144,15 @@ export async function POST(request: Request) {
       return Response.json({ error: "Parallel returned an invalid search result." }, { status: 502 });
     }
 
-    // Keep only the fields our page expects. Join excerpts into one snippet.
+    // Keep the source fields needed to select relevant evidence and snippets.
     // Parallel may omit a title, so use that result's URL as its link text.
-    results.push({ // .push adds a new item to the end of an array
+    sources.push({ // .push adds a new item to the end of an array
       title: result.title ?? result.url, // use left value unless its null otherwise use right
       url: result.url,
-      snippet: result.excerpts.join(" ").slice(0, 2000), // joins excerpts within a display budget
+      excerpts: result.excerpts,
     });
-    // Parallel orders results by relevance. Quote the first nonempty excerpt
-    // from each of the first two usable results, with its own source link.
-    const excerpt = result.excerpts.find((text: string) => text.trim());
-    if (excerpt && answerParts.length < 2) {
-      const text = excerpt.trim();
-      answerParts.push({ text: text.length > 1000 ? `${text.slice(0, 1000)}…` : text, sourceUrl: result.url });
-    }
   }
+  const { results, answerParts } = selectEvidence(query, sources);
 
   // Response.json converts this object into a JSON response for the frontend.
   // The query comes from the request; research results come from Parallel Search.

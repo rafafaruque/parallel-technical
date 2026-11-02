@@ -88,6 +88,96 @@ test('API workflow and persistence safeguards', async (t) => {
     assert.notEqual(next.executionId, snapshot.executionId);
   });
 
+  await t.test('ranks later relevant excerpts over navigation and unrelated first sources', async () => {
+    mockParallel({ results: [
+      { title: 'Unrelated', url: 'https://example.com/weather', excerpts: ['Today the weather is rainy and the roads are wet.'] },
+      { title: 'Plants', url: 'https://example.com/plants', excerpts: [
+        'Home | Products | Menu\nSign up for photosynthesis news.\n[Home](/) [Menu](/menu) [Pricing](/pricing)',
+        'Plants use **sunlight** to convert water and carbon dioxide into sugar through [photosynthesis](https://example.com/process). Photosynthesis releases oxygen as plants use sunlight to produce sugar.',
+      ] },
+    ] });
+    const data = await (await research.POST(request({ query: 'How do plants use sunlight for photosynthesis?' }))).json();
+    assert.equal(data.answerParts.length, 2);
+    assert.ok(data.answer.includes('Plants use sunlight to convert water and carbon dioxide into sugar through photosynthesis.'));
+    assert.ok(data.answerParts.every(part => part.sourceUrl === 'https://example.com/plants'));
+    assert.ok(!/Home|Sign up|rainy|\*\*|\]\(/.test(data.answer));
+    assert.equal(data.answer, data.answerParts.map(part => part.text).join('\n\n'));
+    assert.ok(data.results.every(result => result.snippet.length <= 220));
+  });
+
+  await t.test('caps answers at three short quotes, deduplicates, and keeps long source details', async () => {
+    const quotes = [
+      'Photosynthesis converts light energy into chemical energy in plants.',
+      'Photosynthesis supplies the sugars that support plant growth and development.',
+      'Photosynthesis releases oxygen into the surrounding atmosphere during daylight.',
+      'Photosynthesis depends on pigments that absorb incoming light energy.',
+    ];
+    mockParallel({ results: [{ title: 'Photosynthesis', url: 'https://example.com/plants', excerpts: [quotes.join(' '), quotes[0]] }] });
+    const data = await (await research.POST(request({ query: 'What is photosynthesis?' }))).json();
+    assert.equal(data.answerParts.length, 3);
+    assert.equal(new Set(data.answerParts.map(part => part.text)).size, 3);
+    assert.ok(data.answer.length <= 724);
+    assert.ok(data.answerParts.every(part => part.text.length <= 280 && quotes.includes(part.text)));
+    assert.ok(data.results[0].snippet.length <= 220);
+    assert.ok(data.results[0].fullExcerpt.includes(quotes[3]));
+  });
+
+  await t.test('deduplicates near-identical quotes within and across sources while retaining attribution', async () => {
+    const quotes = [
+      'Photosynthesis converts light energy into chemical energy in plants.',
+      'Photosynthesis converts light energy into chemical energy within plants.',
+      'Photosynthesis releases oxygen into the surrounding atmosphere during daylight.',
+    ];
+    const results = [
+      { title: 'First', url: 'https://example.com/first', excerpts: [quotes[0], quotes[1]] },
+      { title: 'Second', url: 'https://example.com/second', excerpts: [quotes[1], quotes[2]] },
+    ];
+    mockParallel({ results });
+    const data = await (await research.POST(request({ query: 'What is photosynthesis?' }))).json();
+    assert.equal(data.answerParts.length, 2);
+    assert.equal(data.answerParts.filter(part => /converts light energy/.test(part.text)).length, 1);
+    assert.ok(data.answerParts.some(part => part.text === quotes[2]));
+    for (const part of data.answerParts) {
+      assert.ok(results.find(source => source.url === part.sourceUrl).excerpts.includes(part.text));
+    }
+    assert.equal(data.results.length, 2);
+    assert.equal(data.answer, data.answerParts.map(part => part.text).join('\n\n'));
+  });
+
+  await t.test('keeps near-identical quotes with different numbers or qualifications', async () => {
+    for (const quotes of [
+      ['Plants produce 10 grams of sugar during photosynthesis each day.', 'Plants produce 20 grams of sugar during photosynthesis each day.'],
+      ['Photosynthesis may produce sugar in plants during daylight hours.', 'Photosynthesis must produce sugar in plants during daylight hours.'],
+    ]) {
+      mockParallel({ results: quotes.map((text, index) => ({ title: 'Evidence', url: `https://example.com/${index}`, excerpts: [text] })) });
+      const data = await (await research.POST(request({ query: 'What is photosynthesis?' }))).json();
+      assert.equal(data.answerParts.length, 2);
+      assert.deepEqual(new Set(data.answerParts.map(part => part.text)), new Set(quotes));
+    }
+  });
+
+  await t.test('returns no answer for unrelated or boilerplate-only evidence, without allowing feedback', async () => {
+    for (const excerpts of [
+      ['A tomato is a fruit commonly used in cooking and salads.'],
+      ['Sign up for vaccine updates.\nHome | Menu | Vaccines\nWe use cookies to improve vaccine information.'],
+    ]) {
+      mockParallel({ results: [{ title: 'Vaccines', url: 'https://example.com/health', excerpts }] });
+      const data = await (await research.POST(request({ query: 'How do vaccines prevent infections?' }))).json();
+      assert.equal(data.answer, '');
+      assert.deepEqual(data.answerParts, []);
+      assert.equal((await evaluations.POST(request({ feedbackToken: data.feedbackToken, rating: 'correct' }))).status, 400);
+    }
+  });
+
+  await t.test('preserves negations and differing claims instead of merging similar sentences', async () => {
+    const quotes = ['Vaccines do not cause the infections they are designed to prevent.', 'Vaccines cause the infections they are designed to prevent.'];
+    mockParallel({ results: quotes.map((quote, i) => ({ title: 'Evidence', url: `https://example.com/${i}`, excerpts: [quote] })) });
+    const data = await (await research.POST(request({ query: 'Do vaccines cause infections?' }))).json();
+    assert.equal(data.answerParts.length, 2);
+    assert.deepEqual(new Set(data.answerParts.map(part => part.text)), new Set(quotes));
+    assert.ok(data.answerParts.every(part => quotes[Number(part.sourceUrl.split('/').pop())] === part.text));
+  });
+
   await t.test('saves correct feedback and deduplicates concurrent retries', async () => {
     const submissions = await Promise.all(Array.from({ length: 8 }, () => evaluations.POST(request({ feedbackToken: snapshot.feedbackToken, rating: 'correct' }))));
     assert.equal(submissions.filter((response) => response.status === 201).length, 1);
@@ -101,7 +191,8 @@ test('API workflow and persistence safeguards', async (t) => {
   });
 
   await t.test('saves incorrect feedback with notes independently for another execution', async () => {
-    const next = await (await research.POST(request({ query: 'Other question', mode: 'basic' }))).json();
+    mockParallel({ results: sources, search_id: 'search_fixture' });
+    const next = await (await research.POST(request({ query: 'Exact evidence question', mode: 'basic' }))).json();
     const response = await evaluations.POST(request({ feedbackToken: next.feedbackToken, rating: 'incorrect', notes: '  Missing context.  ' }));
     assert.equal(response.status, 201);
     const { evaluation } = await response.json();
@@ -165,7 +256,7 @@ test('API workflow and persistence safeguards', async (t) => {
       return Response.json({ results: sources, search_id: 'mode_search' });
     };
     const snapshots = await Promise.all(['turbo', 'fast', 'basic', 'advanced'].map(async mode => {
-      const response = await research.POST(request({ query: 'Comparison question', mode }));
+      const response = await research.POST(request({ query: 'Exact evidence comparison question', mode }));
       assert.equal(response.status, 200);
       const data = await response.json();
       assert.equal(data.mode, mode);
@@ -177,6 +268,20 @@ test('API workflow and persistence safeguards', async (t) => {
     const { evaluations: saved } = await (await evaluations.GET()).json();
     assert.equal(saved.length, 6);
     assert.equal(new Set(saved.map(item => item.executionId)).size, 6);
+  });
+
+  await t.test('persists the exact concise cleaned answer rather than the noisy source excerpt', async () => {
+    mockParallel({ results: [{ title: 'Plants', url: 'https://example.com/plants', excerpts: [
+      'Home | Menu | Photosynthesis\nSign up for photosynthesis news.\nPhotosynthesis uses **sunlight** to make sugar in plants.',
+    ] }] });
+    const data = await (await research.POST(request({ query: 'What is photosynthesis?' }))).json();
+    assert.equal(data.answer, 'Photosynthesis uses sunlight to make sugar in plants.');
+    const response = await evaluations.POST(request({ feedbackToken: data.feedbackToken, rating: 'correct' }));
+    assert.equal(response.status, 201);
+    const { evaluation } = await response.json();
+    assert.equal(evaluation.answer, data.answerParts.map(part => part.text).join('\n\n'));
+    const disk = JSON.parse(await fs.readFile(path.join(temporary, 'data/evaluations.json'), 'utf8'));
+    assert.equal(disk.find(item => item.id === evaluation.id).answer, data.answer);
   });
 
   await t.test('does not overwrite corrupt storage and can recover after the file is restored', async () => {
